@@ -17,6 +17,18 @@
  */
 
 
+
+
+class Quote {
+  Orders buy;
+  Orders sell;
+  uint32_t matched_buy;
+  uint32_t total_price__buy;
+  uint32_t matched_sell;
+  uint32_t total_price_sell;
+
+};
+
 template<class orderbook>
 void add( uint32_t qty, uint32_t price )
 {
@@ -29,6 +41,7 @@ void remove( uint32_t qty, uint32_t price )
   open_value += qty * price;
   open_qty   += qty;
 }
+
 
 
 template fill( uint32_t qty, uint32_t price )
