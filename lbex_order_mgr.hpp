@@ -17,6 +17,16 @@
  */
 
 
+class InstrumentTable {
+  Quote instrumet[MAX_INSTRUMENTS];
+  
+  char [
+  public:
+    int Init( FILE fh ); 
+}
+
+
+int InstrumentTable::Init
 
 
 class Quote {
