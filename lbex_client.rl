@@ -20,7 +20,6 @@
 
   action do_shutdown {
     printf("Shutdown\n");
-    exit 0;
   }
   
   connect      ="connect" > do_connect;
@@ -28,6 +27,8 @@
   shutdown     ="shutdown" % do_shutdown;
   failover     ="failover";
   node         ="[ABC]";
+
+  main := ( connect | disconnect )* shutdown;
 }%%
 
 
@@ -45,8 +46,6 @@
   action enter_quote {
     printf("Enter Quote\n");
   }
-
-
 
   orderid    = alnum{14};
   quantity   = digit{12};
@@ -66,10 +65,10 @@
 
 int parse_cmd_if( int fd )
 {
-  char buffer[] = "connectdisconnectqqqqqqqq";
+  char buffer[] = "connectdisconnectconnectshutdown";
   char *p;
   int cs;
-  char *pe;
+  char *pe, *eof;
 
   printf("parse_cmd_if : \n"); 
   
@@ -78,9 +77,9 @@ int parse_cmd_if( int fd )
 
   %% include client_cmd;
   p = buffer;
-  pe = buffer + 30;
+  pe = buffer + 33;
   %%{
-    main := ( connect | disconnect ) shutdown;
+    # main := ( connect | disconnect ) shutdown;
     write init;
     write exec;
   }%%
