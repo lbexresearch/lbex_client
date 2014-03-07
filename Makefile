@@ -1,8 +1,9 @@
 TARGET = lbex_client
 CC = g++
+CFLAGS	= -lrt
 
 $(TARGET): lbex_client.cpp
-	$(CC) lbex_client.cpp -o lbex_client
+	$(CC) $(CFLAGS) lbex_client.cpp -o lbex_client
 
 lbex_client.cpp: lbex_client.rl
 	@echo "Generate C++ file"
