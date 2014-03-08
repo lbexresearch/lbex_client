@@ -5,12 +5,19 @@
  *
  * The client use epoll for socket polling, see :
  * http://man7.org/tlpi/code/online/dist/altio/epoll_input.c.html
+ * Changed to poll after reading this.
+ * http://www.ulduzsoft.com/2014/01/select-poll-epoll-practical-difference-for-system-architects/
+ * http://pic.dhe.ibm.com/infocenter/iseries/v6r1m0/index.jsp?topic=/rzab6/poll.htm
  *
+ * 0. If autoconnect = true, goto 3.
  * 1. Wait for connection on the command interface.
  * 2. Verify username and password.
  * 3. Connect to exchange.
  * 4. Manage orders.
  * 4.1 
+ * 
+ * 7.1 Disconnect from exchange
+ * 7.2 Shutdown process.
  *
  *
  *   ctrl orderReq  --> lbex_client --> order_table --> order exchange
@@ -24,7 +31,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <fcntl.h>
-#include <sys/epoll.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -36,11 +43,15 @@
 
 #include "logger.h"
 
-
+#define AUTO_CONNECT = 0
 #define MAXEVENTS 64
 
 %%{
-  machine client_cmd;
+  machine ctrl_if;
+
+  action anything {
+    _DEBUG("State: %d, ( %i -> %i ) char: %c\n", cs, fcurs, ftargs, *p );
+  }
 
   action do_connect {
     printf("Connect\n");
@@ -54,10 +65,10 @@
     printf("Shutdown\n");
   }
   
-  connect      ="connect" > do_connect;
-  disconnect   ="disconnect" > do_disconnect;
-  shutdown     ="shutdown" % do_shutdown;
-  failover     ="failover";
+  connect      = 'connect' > do_connect $anything;
+  disconnect   = 'disconnect' > do_disconnect $anything;
+  shutdown     = 'shutdown' % do_shutdown $anything;
+  failover     = 'failover';
   node         ="[ABC]";
 
   main := ( connect | disconnect )* shutdown;
@@ -98,27 +109,28 @@
 
 
 
-int parse_cmd_if( int fd )
+int parse_ctrl_if( char *buffer, int length )
 {
-  char buffer[] = "connectdisconnectconnectshutdown";
+  // char buffer[] = "connectdisconnectconnectshutdown";
   char *p;
-  int cs;
+  static int cs = 1;
   char *pe, *eof;
 
-  printf("parse_cmd_if : \n"); 
+  printf("1 parse_ctrl_if, cs = %d\n", cs); 
   
 //  %% machine cmd_parser;
-  %% machine order_mgr_parser;
+  %% machine ctrl_if_parser;
   %% write data;
 
 //  %% include client_cmd;
-  %% include order_mgr;
+  %% include ctrl_if;
   p = buffer;
-  pe = buffer + 33;
+  pe = buffer + length;
   %%{
     write init;
     write exec;
   }%%
+  printf("2 parse_ctrl_if, cs = %d\n", cs);
 }
 
 
@@ -129,9 +141,9 @@ int parse_order_if( int fd )
   int  cs; 
   char *pe, *eof;
 
-  printf("parse_cmd_if : \n"); 
+  printf("parse_order_if : \n"); 
   
-  %% machine order_mgr_parser;
+  %% machine order_if_parser;
   %% write data;
 
   %% include order_mgr;
@@ -169,7 +181,20 @@ make_socket_non_blocking (int sfd)
   return 0;
 }
 
+/*
+ * @brief connect to exchange
+ *
+ * Return filedescriptor.
+ *
+ */
+static int
+connect_exchange( int ip, int port )
+{
+  int fd = 3;
+  log_info("Connection to me on port %d\n", port);  
 
+  return fd;
+}
 
 
 
@@ -219,6 +244,17 @@ create_ctrl_socket (char *port)
 
   freeaddrinfo (result);
 
+  s = make_socket_non_blocking (sfd);
+  if (s == -1)
+    abort ();
+
+  s = listen (sfd, SOMAXCONN);
+  if (s == -1)
+  {
+    perror ("listen");
+    abort ();
+  }
+
   return sfd;
 }
 
@@ -234,7 +270,7 @@ int verify_login( int fd )
   char buf[] = "user01testonly";
 
   log_info("Waiting for connection on fd %i\n", fd );
-  
+   
   if( strncmp( buf, "user01", 6 ) == 0 )
   {
     if( strncmp( buf + 6, "testonly", 8 ) == 0 )
@@ -251,12 +287,22 @@ int verify_login( int fd )
  * @brief Parse two streams.
  *
  * 1. Start process.
- * 2. Listen for control port connection.
- * 3. When control process connects.
+ * 2. Allocate ctrl port, if fail then exit.
+ * 3. If autoconnect = 1, connect to exchange.
+ * 4. .
  * 4. Connect to exchange.
+ *
+ * ExchangePort          CtrlPort fds
+ *            0                 0   1  Listen on ctrl port
+ *            0                 1   1  Connected on ctrl port
+ *            1                 0   2  Connet to exch, listen ctrl.
+ *            1                 1   2  Connected to both.
  */
 
 #define MAX_BUF     1000        /* Maximum bytes fetched by a single read() */
+#define TRUE 1
+#define FALSE 0
+
 
 main ()
 {
@@ -264,113 +310,109 @@ main ()
   int trading_fd = 2;
   int s, n;
   int efd;
+  int new_sd;
+  const int control_port = 0;
+  const int exchange_port = 0;
+  int connected_ctrl = 0;
+  int connected_exch = 1;
+  int    desc_ready, end_server = FALSE, compress_array = FALSE;
+  int    close_conn;
   // int control_socket;
   int sfd;
   int numOpenFds;
-  struct epoll_event ev;
-  struct epoll_event evlist[MAXEVENTS];
+  struct pollfd fds[2];
+  
+  
   char buf[1024];
-  
-  
   char port[] = "6500";
- 
-  struct epoll_event event;
-  struct epoll_event *events; 
 
   printf("Starting lbex order manager\n"); 
  
-  parse_cmd_if( cmd_fd ); 
+  // parse_cmd_if( cmd_fd ); 
 
   sfd = create_ctrl_socket( port ); 
   if (sfd == -1)
-    abort ();
-
-  make_socket_non_blocking (sfd);
-  if (s == -1)
-    abort ();
-
-  s = listen (sfd, SOMAXCONN);
-  if (s == -1)
-    {
-      perror ("listen");
-      abort ();
-    }  
-
-
-  efd = epoll_create1 (0);
-  if (efd == -1)
-    {
-      perror ("epoll_create");
-      abort ();
-    }
-
-  event.data.fd = sfd;
-  event.events = EPOLLIN | EPOLLET;
-  s = epoll_ctl (efd, EPOLL_CTL_ADD, sfd, &event);
-  if (s == -1)
-    {
-      perror ("epoll_ctl");
-      abort ();
-    }
+  {
+    log_err("Couldn't allocate ctrl port %d\n", port);
+    exit( -1 );
+  }
 
   /* Buffer where events are returned */
-  events = ( epoll_event* )calloc (MAXEVENTS, sizeof event);
- 
-
+  fds[0].fd = sfd;
+  fds[0].events = POLLIN; 
+  
+  fds[exchange_port].fd = sfd;
+  fds[exchange_port].events = POLLIN;  
 
   while(1)
   {
     int n;
-
     printf("Waiting for control server connection\n");
-    n = epoll_wait (efd, events, MAXEVENTS, -1);
-  
+    n = poll(fds, 1, 10000 );
 
-    log_info("Connection on port : %d\n", n); 
+    log_info("Event on socket : %d\n", n); 
     if (n == -1) {
-      if (errno == EINTR)
-        continue;               /* Restart if interrupted by signal */
-      else
-        perror("epoll_wait");
-        exit(-1);
+      log_info("Poll returned -1", n );
     } 
-    
-    printf("Ready: %d\n", n);
-
-    /* Deal with returned list of events */
-
-    for (int j = 0; j < n; j++) {
-      printf("  fd=%d; events: %s%s%s\n", evlist[j].data.fd,
-      (evlist[j].events & EPOLLIN)  ? "EPOLLIN "  : "",
-      (evlist[j].events & EPOLLHUP) ? "EPOLLHUP " : "",
-      (evlist[j].events & EPOLLERR) ? "EPOLLERR " : "");
-
-      if (evlist[j].events & EPOLLIN) {
-        s = read(evlist[j].data.fd, buf, MAX_BUF);
-        if (s == -1)
-        printf("read");
-        printf("    read %d bytes: %.*s\n", s, s, buf);
-
-      } else if (evlist[j].events & (EPOLLHUP | EPOLLERR)) {
-
-        /* After the epoll_wait(), EPOLLIN and EPOLLHUP may both have
-           been set. But we'll only get here, and thus close the file
-           descriptor, if EPOLLIN was not set. This ensures that all
-           outstanding input (possibly more than MAX_BUF bytes) is
-           consumed (by further loop iterations) before the file
-           descriptor is closed. */
-
-           printf("    closing fd %d\n", evlist[j].data.fd);
-           if (close(evlist[j].data.fd) == -1)
-             printf("close");
-             numOpenFds--;
-           }
-     }
+    else if ( n == 0 )
+    {
+      log_info("Poll timed out\n", n ); 
     }
-    printf("All file descriptors closed; bye\n");
-    exit(EXIT_SUCCESS);
-    
-    log_info("Connection on port : %d\n", n);
-     
+    else
+    { 
+      // Event on ctrl fd, eiter new connection on listen port or data.
+      if ( fds[0].revents & POLLIN )
+      {
+        if( ! connected_ctrl )
+        {
+          fds[0].revents = 0;
+          log_info("Input on event sock : %d\n", fds[0].fd ); 
+          new_sd = accept(fds[0].fd, NULL, NULL);
+          log_info("New connection on ctrl port : %d\n",new_sd );
+          connected_ctrl = TRUE;
+          if (new_sd < 0)
+          {
+            if (errno != EWOULDBLOCK)
+            {
+              perror("  accept() failed");
+              end_server = TRUE;
+            }
+            break;
+          } else {
+            close( fds[0].fd );
+            fds[0].fd = new_sd;  
+          }
+        } else {
+          do 
+          {
+            n = recv( fds[0].fd, buf, sizeof( buf ), 0 );
+            if (n < 0)
+            {
+              if (errno != EWOULDBLOCK)
+              {
+                perror("  recv() failed");
+                close_conn = TRUE;
+              }
+              break;
+            }
+            if (n == 0)
+            {
+              printf("  Connection closed\n");
+              close_conn = TRUE;
+              break;
+            }
+            log_info("Received %d bytes\n", n );
+            parse_ctrl_if( buf, n );            
+          } while( TRUE );
+        }
+      }
+    }
+  }
+  for ( int i = 0; i < 2 ; i++)
+  {
+    if(fds[i].fd >= 0)
+      close(fds[i].fd);
+  } 
+  printf("All file descriptors closed; bye\n");
+  exit(EXIT_SUCCESS);
 }
-
