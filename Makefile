@@ -2,6 +2,11 @@ TARGET = lbex_client
 CC = g++
 CFLAGS	= -lrt
 
+all: lbex_client
+
+debug: CC += -DDEBUG -g
+debug: $(TARGET)
+
 $(TARGET): lbex_client.cpp
 	$(CC) $(CFLAGS) lbex_client.cpp -o lbex_client
 

@@ -9,11 +9,11 @@
  * http://www.ulduzsoft.com/2014/01/select-poll-epoll-practical-difference-for-system-architects/
  * http://pic.dhe.ibm.com/infocenter/iseries/v6r1m0/index.jsp?topic=/rzab6/poll.htm
  *
- * 0. If autoconnect = true, goto 3.
- * 1. Wait for connection on the command interface.
- * 2. Verify username and password.
- * 3. Connect to exchange.
- * 4. Manage orders.
+ * 0.   If autoconnect = true, goto 3.
+ * 1.   Wait for connection on the command interface.
+ * 2.   Verify username and password.
+ * 3.   Connect to exchange.
+ * 4.   Manage orders.
  * 4.1 
  * 
  * 7.1 Disconnect from exchange
@@ -63,11 +63,13 @@
 
   action do_shutdown {
     printf("Shutdown\n");
+    //exit( 0 );
   }
   
-  connect      = 'connect' > do_connect $anything;
-  disconnect   = 'disconnect' > do_disconnect $anything;
-  shutdown     = 'shutdown' % do_shutdown $anything;
+  connect      = 'connect' >do_connect $anything;
+  disconnect   = 'disconnect' >do_disconnect $anything;
+  shutdown     = 'shutdown' >do_shutdown $anything;
+  order        = [BS] digit{12} alnum{4} digit{10} >enter_order $anything;
   failover     = 'failover';
   node         ="[ABC]";
 
@@ -333,7 +335,7 @@ main ()
   sfd = create_ctrl_socket( port ); 
   if (sfd == -1)
   {
-    log_err("Couldn't allocate ctrl port %d\n", port);
+    log_err("Couldn't allocate ctrl port %.4s\n", port);
     exit( -1 );
   }
 
