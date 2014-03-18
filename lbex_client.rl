@@ -24,7 +24,7 @@
  *   ctrl orderAck  <-- lbex_client <-- order_table <-- ack   exchange
  *   ctrl orderMat  <-- lbex_client <-- order_table <-- match exchange
                                         match_table <-|
- *   ctrl cancelOrd --> lbex_client -->            --> cancel exchange
+ *   ctrl cancelOrd --> lbex_client -->             --> cancel exchange
  *   ctrl canelAcl  <-- lbex_client <-- order_table <-- cancelled exchange
  */ 
 
@@ -49,6 +49,10 @@
 %%{
   machine ctrl_if;
 
+  action do_enter_order {
+    printf("Enter order : \n");
+  }
+
   action anything {
     _DEBUG("State: %d, ( %i -> %i ) char: %c\n", cs, fcurs, ftargs, *p );
   }
@@ -63,17 +67,27 @@
 
   action do_shutdown {
     printf("Shutdown\n");
-    //exit( 0 );
+    exit( 0 );
   }
-  
+ 
+  action buy_order {
+    printf("Buy : \n");
+  }
+
+  action sell_order {
+    printf("Sell : \n");
+  }
+
+ 
   connect      = 'connect' >do_connect $anything;
   disconnect   = 'disconnect' >do_disconnect $anything;
   shutdown     = 'shutdown' >do_shutdown $anything;
-  order        = [BS] digit{12} alnum{4} digit{10} >enter_order $anything;
+  buy          = 'B' digit{12} alnum{4} digit{10} >buy_order $anything;
+  sell         = 'S' digit{12} alnum{4} digit{10} >sell_order $anything;
   failover     = 'failover';
   node         ="[ABC]";
 
-  main := ( connect | disconnect )* shutdown;
+  main := ( connect | disconnect | buy | sell )* shutdown;
 }%%
 
 
@@ -288,22 +302,41 @@ int verify_login( int fd )
 /*
  * @brief Parse two streams.
  *
+ * Initially :
+ * Listen on ctrl_port and :
+ *   1. Connect to exchange_port if either connect is sent one the ctrl port
+ *   2. or auto connect is specified.
+ *
+ *
+ *
  * 1. Start process.
  * 2. Allocate ctrl port, if fail then exit.
  * 3. If autoconnect = 1, connect to exchange.
- * 4. .
+ * 4. Wait for ctrl connection.
  * 4. Connect to exchange.
  *
- * ExchangePort          CtrlPort fds
- *            0                 0   1  Listen on ctrl port
- *            0                 1   1  Connected on ctrl port
- *            1                 0   2  Connet to exch, listen ctrl.
- *            1                 1   2  Connected to both.
+ * ExchangePort          CtrlPort  Sockets 
+ *            0                 0        1  Listen on ctrl port
+ *            0                 1        1  Connected on ctrl port
+ *            1                 0        2  Connet to exch, listen ctrl.
+ *            1                 1        2  Connected to both.
+ *
+ * Nothing connected fds 
+ *
  */
+
+struct connection {
+  int connection_status;
+  int fd;
+};
 
 #define MAX_BUF     1000        /* Maximum bytes fetched by a single read() */
 #define TRUE 1
 #define FALSE 0
+#define CTRL_FDS 0
+#define EXCH_FDS 1
+#define CTRL_CONNECTED 1
+#define EXCH_CONNECTED 2
 
 
 main ()
@@ -313,108 +346,123 @@ main ()
   int s, n;
   int efd;
   int new_sd;
-  const int control_port = 0;
-  const int exchange_port = 0;
+  // const int control_port = 0;
+  // const int exch_port = 0;
+  int connect_exch = FALSE;
   int connected_ctrl = 0;
-  int connected_exch = 1;
-  int    desc_ready, end_server = FALSE, compress_array = FALSE;
+  int connected_exch = 0;
+  int auto_connet = FALSE;
+  int sockets = 1;
+  int    desc_ready, end_server = FALSE;
   int    close_conn;
-  // int control_socket;
+  int control_socket;
   int sfd;
   int numOpenFds;
   struct pollfd fds[2];
-  
+  connection ctrl_connection;
+  connection exch_connection;
   
   char buf[1024];
-  char port[] = "6500";
+  char ctrl_port[] = "6500";
+  char exch_port[] = "65000";
 
   printf("Starting lbex order manager\n"); 
  
   // parse_cmd_if( cmd_fd ); 
 
-  sfd = create_ctrl_socket( port ); 
-  if (sfd == -1)
+  while( 1 )
   {
-    log_err("Couldn't allocate ctrl port %.4s\n", port);
-    exit( -1 );
-  }
-
-  /* Buffer where events are returned */
-  fds[0].fd = sfd;
-  fds[0].events = POLLIN; 
-  
-  fds[exchange_port].fd = sfd;
-  fds[exchange_port].events = POLLIN;  
-
-  while(1)
-  {
-    int n;
-    printf("Waiting for control server connection\n");
-    n = poll(fds, 1, 10000 );
-
-    log_info("Event on socket : %d\n", n); 
-    if (n == -1) {
-      log_info("Poll returned -1", n );
-    } 
-    else if ( n == 0 )
+    if ( connected_ctrl )
     {
-      log_info("Poll timed out\n", n ); 
-    }
-    else
-    { 
-      // Event on ctrl fd, eiter new connection on listen port or data.
-      if ( fds[0].revents & POLLIN )
+      sfd = create_ctrl_socket( ctrl_port ); 
+      if (sfd == -1)
       {
-        if( ! connected_ctrl )
+        log_err("Couldn't allocate ctrl port %.4s\n", ctrl_port);
+        exit( -1 );
+      }
+    } 
+    /* Buffer where events are returned */
+    fds[0].fd = sfd;
+    fds[CTRL_FDS].events = POLLIN; 
+    
+    if( connect_exch && ( ! connected_exch ))
+    {
+      log_info("Connection to exchange on port %.4c\n", exch_port ); 
+      fds[exchange_port].fd = sfd;
+      fds[exchange_port].events = POLLIN;  
+    }
+  
+    while( ctrl_connected )
+    {
+      int n;
+      printf("Waiting for control server connection\n");
+      n = poll(fds, sockets, 10000 );
+  
+      log_info("Event on socket : %d\n", n); 
+      if (n == -1) {
+        log_info("Poll returned -1", n );
+      } 
+      else if ( n == 0 )
+      {
+        log_info("Poll timed out\n", n ); 
+      }
+      else
+      { 
+        // Event on ctrl fd, eiter new connection on listen port or data.
+        if ( fds[0].revents & POLLIN )
         {
-          fds[0].revents = 0;
-          log_info("Input on event sock : %d\n", fds[0].fd ); 
-          new_sd = accept(fds[0].fd, NULL, NULL);
-          log_info("New connection on ctrl port : %d\n",new_sd );
-          connected_ctrl = TRUE;
-          if (new_sd < 0)
+          if( ! connected_ctrl )
           {
-            if (errno != EWOULDBLOCK)
-            {
-              perror("  accept() failed");
-              end_server = TRUE;
-            }
-            break;
-          } else {
-            close( fds[0].fd );
-            fds[0].fd = new_sd;  
-          }
-        } else {
-          do 
-          {
-            n = recv( fds[0].fd, buf, sizeof( buf ), 0 );
-            if (n < 0)
+            fds[0].revents = 0;
+            log_info("Input on event sock : %d\n", fds[0].fd ); 
+            new_sd = accept(fds[0].fd, NULL, NULL);
+            log_info("New connection on ctrl port : %d\n",new_sd );
+            connected_ctrl = TRUE;
+            if (new_sd < 0)
             {
               if (errno != EWOULDBLOCK)
               {
-                perror("  recv() failed");
-                close_conn = TRUE;
+                perror("  accept() failed");
+                end_server = TRUE;
               }
               break;
+            } else {
+              close( fds[0].fd );
+              fds[0].fd = new_sd;  
             }
-            if (n == 0)
+          } else {
+            do 
             {
-              printf("  Connection closed\n");
-              close_conn = TRUE;
-              break;
-            }
-            log_info("Received %d bytes\n", n );
-            parse_ctrl_if( buf, n );            
-          } while( TRUE );
+              n = recv( fds[0].fd, buf, sizeof( buf ), 0 );
+              if (n < 0)
+              {
+                if (errno != EWOULDBLOCK)
+                {
+                  perror("  recv() failed");
+                  close_conn = TRUE;
+                }
+                break;
+              }
+              if (n == 0)
+              {
+                printf("  Connection closed\n");
+                close_conn = TRUE;
+                break;
+              }
+              log_info("Received %d bytes\n", n );
+              parse_ctrl_if( buf, n );            
+            } while( TRUE );
+          }
         }
       }
     }
+    for ( int i = 0; i < 2 ; i++)
+    {
+      if(fds[i].fd >= 0)
+        close(fds[i].fd);
+    } 
+    printf("All file descriptors closed; bye\n");
+    exit(EXIT_SUCCESS);
   }
-  for ( int i = 0; i < 2 ; i++)
-  {
-    if(fds[i].fd >= 0)
-      close(fds[i].fd);
-  } 
-  printf("All file descriptors closed; bye\n");
-  exit(EXIT_SUCCESS);
+  return 0;
 }
