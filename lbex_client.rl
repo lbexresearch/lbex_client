@@ -321,6 +321,13 @@ int verify_login( int fd )
  *            1                 0        2  Connet to exch, listen ctrl.
  *            1                 1        2  Connected to both.
  *
+ * 
+ * ctrl connect     connection_status |= CTRL_CONNECTED  fds[CTRL_CONNECTED] = 1
+ * ctrl disconnect  connection_status ^= CTRL_CONNECTED  fds[CTRL_CONNECTED] = 0
+ * exch connect     connection_status |= EXCH_CONNECTED  fds[EXCH_CONNECTED] = 1
+ * exch disconnect  connection_status ^= EXCH_CONNECTED  fds[EXCH_CONNECTED] = 0
+ * 
+ *
  * Nothing connected fds 
  *
  */
