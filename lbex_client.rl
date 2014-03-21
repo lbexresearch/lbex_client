@@ -310,30 +310,50 @@ int verify_login( int fd )
  *
  *
  * 1. Start process.
- * 2. Allocate ctrl port, if fail then exit.
- * 3. If autoconnect = 1, connect to exchange.
- * 4. Wait for ctrl connection.
+ * 2. Check for recovery file
+ * 2.1  Parse recovery file is present, populate internal data structures.
+ * 3.   Allocate ctrl port, if fail try secondary port, if fail exit.
+ *      We always need a working ctrl socket.
+ * 4. If autoconnect = 1, connect to exchange.
+ * 5. Wait for connection on the ctrl port.
  * 4. Connect to exchange.
  *
- * ExchangePort          CtrlPort  Sockets 
+ * ExchangePort          CtrlPort  sockets 
  *            0                 0        1  Listen on ctrl port
  *            0                 1        1  Connected on ctrl port
  *            1                 0        2  Connet to exch, listen ctrl.
  *            1                 1        2  Connected to both.
  *
  * 
- * ctrl connect     connection_status |= CTRL_CONNECTED  fds[CTRL_CONNECTED] = 1
- * ctrl disconnect  connection_status ^= CTRL_CONNECTED  fds[CTRL_CONNECTED] = 0
- * exch connect     connection_status |= EXCH_CONNECTED  fds[EXCH_CONNECTED] = 1
- * exch disconnect  connection_status ^= EXCH_CONNECTED  fds[EXCH_CONNECTED] = 0
+ * Event
+ * ctrl connect     connection_status |= CTRL_CONNECTED  fds[CTRL] = 1
+ * ctrl disconnect  connection_status ^= CTRL_CONNECTED  fds[CTRL] = 0
+ * exch connect     connection_status |= EXCH_CONNECTED  fds[EXCH] = 1
+ * exch disconnect  connection_status ^= EXCH_CONNECTED  fds[EXCH] = 0
  * 
+ * CTRL = 0
+ * EXCH = 1 
  *
- * Nothing connected fds 
+ * If ctrl_fd = 0 => No connection on the ctrl port.
+ * If exch_fd = 0 => Not connected to the exchange.
+ *
+ * Poll vill ignore fds[n] that have a value 0.
+ * 
+ * Nothing connected fds -> listen on ctrl_fd
+ * 
+ * When ctrl connects
+ * 1. Close the listen port, only accept one connection. 
+ * 2. Verify login details.
+ * 3. Start accepting requests.
+ *
+ * When ctrl disconnects
+ * 1. Close fd.
+ * 2. Start listening to the ctrl port again.
  *
  */
 
 struct connection {
-  int connection_status;
+  int status;
   int fd;
 };
 
@@ -395,11 +415,11 @@ main ()
     if( connect_exch && ( ! connected_exch ))
     {
       log_info("Connection to exchange on port %.4c\n", exch_port ); 
-      fds[exchange_port].fd = sfd;
-      fds[exchange_port].events = POLLIN;  
+      // fds[exchange_port].fd = sfd;
+      // fds[exchange_port].events = POLLIN;  
     }
   
-    while( ctrl_connected )
+    while( ! ctrl_connection.status )
     {
       int n;
       printf("Waiting for control server connection\n");
