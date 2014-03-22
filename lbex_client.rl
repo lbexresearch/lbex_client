@@ -26,6 +26,8 @@
                                         match_table <-|
  *   ctrl cancelOrd --> lbex_client -->             --> cancel exchange
  *   ctrl canelAcl  <-- lbex_client <-- order_table <-- cancelled exchange
+ *
+ * http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#pollman
  */ 
 
 #include <stdio.h>
@@ -309,20 +311,34 @@ int verify_login( int fd )
  *
  *
  *
- * 1. Start process.
- * 2. Check for recovery file
- * 2.1  Parse recovery file is present, populate internal data structures.
- * 3.   Allocate ctrl port, if fail try secondary port, if fail exit.
- *      We always need a working ctrl socket.
- * 4. If autoconnect = 1, connect to exchange.
- * 5. Wait for connection on the ctrl port.
- * 4. Connect to exchange.
+ * 1.  Start process.
+ * 2.  Check for recovery file
+ * 2.1 Parse recovery file is present, populate internal data structures.
+ * 3   Join multicast port listening to the feed.
+ * 3.1   If failed to join, exit.
+ * 3.2 If there is a sequence number gap, do a rerequest to fill gap.
+ *     
+ * 4.  Allocate ctrl port, if fail try secondary port, if fail exit.
+ * 5.  If autoconnect = 1, connect to exchange.
+ * 6.  Wait for connection on the ctrl port.
+ * 7.  Connect to exchange.
+ * 8.  Wait for SOD
+ * 9.  Accept orders
+ * 
+ *           ----------                     -------------------
+ *           |        |--- TCP connection-->|  
+ * ---ctrl-->| Client |<-- UDP feed --------| Exchange
+ *           |        |                     -------------------
+ *           |        |<-- TCP Rerequest -->| Rerequest server         
+ *           ----------                     -------------------
  *
- * ExchangePort          CtrlPort  sockets 
- *            0                 0        1  Listen on ctrl port
- *            0                 1        1  Connected on ctrl port
- *            1                 0        2  Connet to exch, listen ctrl.
- *            1                 1        2  Connected to both.
+ * ExchangePort   CtrlPort  Mc   Req    sockets 
+ *            0          0   0          0  Started 
+ *            0          0   1          1  Listen on multicast feed 
+ *            0          0   0          1  Listen on ctrl port
+ *            0          1              1  Connected on ctrl port
+ *            1          0              2  Connet to exch, listen ctrl.
+ *            1          1              2  Connected to both.
  *
  * 
  * Event
@@ -331,8 +347,11 @@ int verify_login( int fd )
  * exch connect     connection_status |= EXCH_CONNECTED  fds[EXCH] = 1
  * exch disconnect  connection_status ^= EXCH_CONNECTED  fds[EXCH] = 0
  * 
- * CTRL = 0
- * EXCH = 1 
+ * BREW = 0    0x1   0001
+ * CTRL = 1    0x2   0010
+ * EXCH = 2    0x4   0100
+ * RREQ = 3    0x8   1000
+ * 
  *
  * If ctrl_fd = 0 => No connection on the ctrl port.
  * If exch_fd = 0 => Not connected to the exchange.
@@ -350,6 +369,21 @@ int verify_login( int fd )
  * 1. Close fd.
  * 2. Start listening to the ctrl port again.
  *
+ * Order Management
+ *
+ * struct request {
+ *   uint32_t  status; // pending, new, 
+ *   void         *req; // order_add, cancel
+ * }
+ *
+ * request request_p[MAX_REQUESTS];
+ * uint32_t execution[MAX_INSTRUMENT];
+ *   
+ *
+ * client --> request[n].status = pending       ->     matching_engine
+ *            request[n].status = new           <- ack matching_engine
+ *            request[n].status = part_fill     <- match 
+ *            execution[request->request.instrument] += qty;         
  */
 
 struct connection {
