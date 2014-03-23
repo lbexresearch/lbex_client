@@ -1,5 +1,5 @@
 /*
- * State machine definition for the beer client.
+ * State machine definition for the lbex order entry gw.
  *
  * Command interface
  *
@@ -276,6 +276,84 @@ create_ctrl_socket (char *port)
   return sfd;
 }
 
+int join_mc_gr( char* ip, int port )
+{
+  struct sockaddr_in localSock;
+  struct ip_mreq group;
+  int sd;
+  int datalen;
+  char databuf[1024];
+
+  /* Create a datagram socket on which to receive. */
+  sd = socket(AF_INET, SOCK_DGRAM, 0);
+  if(sd < 0)
+  {
+    perror("Opening datagram socket error");
+    exit(1);
+  }
+  else
+  printf("Opening datagram socket....OK.\n");
+ 
+  /* Enable SO_REUSEADDR to allow multiple instances of this */
+  /* application to receive copies of the multicast datagrams. */
+  {
+    int reuse = 1;
+    if(setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse)) < 0)
+    {
+      perror("Setting SO_REUSEADDR error");
+      close(sd);
+      exit(1);
+    }
+    else
+      printf("Setting SO_REUSEADDR...OK.\n");
+    }
+ 
+    /* Bind to the proper port number with the IP address */
+    /* specified as INADDR_ANY. */
+    memset((char *) &localSock, 0, sizeof(localSock));
+    localSock.sin_family = AF_INET;
+    localSock.sin_port = htons(port);
+    localSock.sin_addr.s_addr = INADDR_ANY;
+    if(bind(sd, (struct sockaddr*)&localSock, sizeof(localSock)))
+    {
+      perror("Binding datagram socket error");
+      close(sd);
+      exit(1);
+    }
+    else
+      printf("Binding datagram socket...OK.\n");
+ 
+      /* Join the multicast group 226.1.1.1 on the local 203.106.93.94 */
+      /* interface. Note that this IP_ADD_MEMBERSHIP option must be */
+      /* called for each local interface over which the multicast */
+      /* datagrams are to be received. */
+      group.imr_multiaddr.s_addr = inet_addr( ip );
+      group.imr_interface.s_addr = inet_addr("192.168.0.3");
+      if(setsockopt(sd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&group, sizeof(group)) < 0)
+      {
+        perror("Adding multicast group error");
+        close(sd);
+        exit(1);
+      }
+      else
+      printf("Adding multicast group...OK.\n");
+ 
+      /* Read from the socket. */
+/*      datalen = sizeof(databuf);
+      int n = read(sd, databuf, datalen);
+      if( n < 0)
+      {
+        perror("Reading datagram message error");
+        close(sd);
+        exit(1);
+      }
+      else
+      {
+        printf("Reading datagram message...OK.\n");
+        printf("The message from multicast server is: \"%x %x\" %d\n", databuf[0], databuf[1], n);
+      } */
+  return sd;
+}
 
 /*
  * @brief Wait for control connection.
@@ -302,16 +380,27 @@ int verify_login( int fd )
 
 
 /*
- * @brief Parse two streams.
+ * @brief Lbex .
  *
  * Initially :
- * Listen on ctrl_port and :
- *   1. Connect to exchange_port if either connect is sent one the ctrl port
- *   2. or auto connect is specified.
  *
+ * 1.0 Start the gateway.
+
+ * 2.  Check for recovery file
+ * 2.1 Parse recovery file is present, populate internal data structures.
+
+ * 1.1 Join the me multicast feed.
+
+
+
+
+ * 1.2 Wait for a heartbeat.
+ * 1.3 Connect to the exchange order management port.
+ * 
+ * 2.2 Wait for SOD and and then populate the gateway with reference data.
+ * 
+ * 2.0 Listen on ctrl_port and :
  *
- *
- * 1.  Start process.
  * 2.  Check for recovery file
  * 2.1 Parse recovery file is present, populate internal data structures.
  * 3   Join multicast port listening to the feed.
@@ -332,13 +421,12 @@ int verify_login( int fd )
  *           |        |<-- TCP Rerequest -->| Rerequest server         
  *           ----------                     -------------------
  *
- * ExchangePort   CtrlPort  Mc   Req    sockets 
- *            0          0   0          0  Started 
- *            0          0   1          1  Listen on multicast feed 
- *            0          0   0          1  Listen on ctrl port
- *            0          1              1  Connected on ctrl port
- *            1          0              2  Connet to exch, listen ctrl.
- *            1          1              2  Connected to both.
+ * State    Event     RREQ  CLNT  EXCH  BURP     *    NewState 
+ *     0    Start        0     0     0     0     0    Starting 
+ * Starting Restart      0     0     0     0     0    Restart
+ * Rerq                  1     0     0     1     9    Starting
+ * Started  ClConn       0     0     1     1     3    Client Connected 
+ * ClConed  LoggedIn     0     1     1     1     8    OrderMgm
  *
  * 
  * Event
@@ -347,10 +435,10 @@ int verify_login( int fd )
  * exch connect     connection_status |= EXCH_CONNECTED  fds[EXCH] = 1
  * exch disconnect  connection_status ^= EXCH_CONNECTED  fds[EXCH] = 0
  * 
- * BREW = 0    0x1   0001
- * CTRL = 1    0x2   0010
- * EXCH = 2    0x4   0100
- * RREQ = 3    0x8   1000
+ * BURP = 0    0x1   0001 1. Binary mUlticast ? Protocol
+ * EXCH = 1    0x2   0010 2. Exchange connection 
+ * CLNT = 2    0x4   0100 4  Client connection
+ * RREQ = 3    0x8   1000 8  Rerequest server
  * 
  *
  * If ctrl_fd = 0 => No connection on the ctrl port.
@@ -394,10 +482,14 @@ struct connection {
 #define MAX_BUF     1000        /* Maximum bytes fetched by a single read() */
 #define TRUE 1
 #define FALSE 0
-#define CTRL_FDS 0
-#define EXCH_FDS 1
-#define CTRL_CONNECTED 1
-#define EXCH_CONNECTED 2
+#define BURP 0x01
+#define BURPIX BURP - 1
+#define EXCH 0x02
+#define EXCHIX EXCH - 1
+#define CLNT 0x03
+#define CLNTIX CLNT - 1
+#define RREQ 0x04
+#define RREQIX 0x04 - 1
 
 
 main ()
@@ -412,6 +504,7 @@ main ()
   int connect_exch = FALSE;
   int connected_ctrl = 0;
   int connected_exch = 0;
+  int connection_status = 0;
   int auto_connet = FALSE;
   int sockets = 1;
   int    desc_ready, end_server = FALSE;
@@ -419,21 +512,42 @@ main ()
   int control_socket;
   int sfd;
   int numOpenFds;
-  struct pollfd fds[2];
+  struct pollfd fds[4];
   connection ctrl_connection;
   connection exch_connection;
   
   char buf[1024];
   char ctrl_port[] = "6500";
-  char exch_port[] = "65000";
+  char exch_ip[] = "192.168.0.3";
+  int  exch_port = 6003;
+  char burp_ip[] = "239.9.9.9";
+  int burp_port = 7000;
+  int burp_fd;
+  
+  log_info("Starting lbex order gw listening on port : %d\n", ctrl_port );
 
-  printf("Starting lbex order manager\n"); 
+  log_info("Join multicast group %s:%d\n", burp_ip, burp_port );
+  sfd = join_mc_gr( burp_ip,  burp_port );
+  if( burp_fd < 0 ) {
+    log_err("Failed to join multicast group, shutting down : %d\n", sfd );
+    exit( 1 );
+  }
+  fds[BURP - 1].fd = sfd;
+  fds[BURP - 1].events = POLLIN;
+  connection_status |= BURP;
+
+  log_info("Connect to exchange %s:%d\n", exch_ip, exch_port );
+   
+
+  log_info("Creating client socket : %d\n", clnt_port );
  
   // parse_cmd_if( cmd_fd ); 
 
   while( 1 )
   {
-    if ( connected_ctrl )
+    log_info("Connection status : %d\n", connection_status );
+    // If 
+    if ( ! connection_status && CLNT )
     {
       sfd = create_ctrl_socket( ctrl_port ); 
       if (sfd == -1)
@@ -441,25 +555,24 @@ main ()
         log_err("Couldn't allocate ctrl port %.4s\n", ctrl_port);
         exit( -1 );
       }
+      fds[CLNT].fd = sfd;
+      fds[CLNT].events = POLLIN;
     } 
-    /* Buffer where events are returned */
-    fds[0].fd = sfd;
-    fds[CTRL_FDS].events = POLLIN; 
     
-    if( connect_exch && ( ! connected_exch ))
+    if( ! connection_status  && EXCH )
     {
       log_info("Connection to exchange on port %.4c\n", exch_port ); 
-      // fds[exchange_port].fd = sfd;
-      // fds[exchange_port].events = POLLIN;  
+      fds[EXCHIX].fd = sfd;
+      fds[EXCHIX].events = POLLIN;  
     }
   
-    while( ! ctrl_connection.status )
-    {
+//    while( ! ctrl_connection.status )
+//     {
       int n;
-      printf("Waiting for control server connection\n");
+      printf("Waiting for incomming packets, no sockets : %d\n", sockets);
       n = poll(fds, sockets, 10000 );
   
-      log_info("Event on socket : %d\n", n); 
+      log_info("Event on sockets : %d\n", n); 
       if (n == -1) {
         log_info("Poll returned -1", n );
       } 
@@ -469,61 +582,90 @@ main ()
       }
       else
       { 
-        // Event on ctrl fd, eiter new connection on listen port or data.
-        if ( fds[0].revents & POLLIN )
+        // Check for incomming data BURP, CTRL.
+        // BURP inpur
+        if ( fds[BURPIX ].revents & POLLIN )
         {
-          if( ! connected_ctrl )
+          fds[BURPIX].revents = 0;
+          log_info("Input on event sock : %d\n", fds[BURP].fd ); 
+          do 
           {
-            fds[0].revents = 0;
-            log_info("Input on event sock : %d\n", fds[0].fd ); 
-            new_sd = accept(fds[0].fd, NULL, NULL);
-            log_info("New connection on ctrl port : %d\n",new_sd );
-            connected_ctrl = TRUE;
-            if (new_sd < 0)
+            n = recv( fds[BURPIX].fd, buf, sizeof( buf ), 0 );
+            if (n < 0)
             {
               if (errno != EWOULDBLOCK)
               {
-                perror("  accept() failed");
-                end_server = TRUE;
+                perror("  recv() failed");
+                close_conn = TRUE;
               }
               break;
-            } else {
-              close( fds[0].fd );
-              fds[0].fd = new_sd;  
-            }
-          } else {
-            do 
-            {
-              n = recv( fds[0].fd, buf, sizeof( buf ), 0 );
-              if (n < 0)
-              {
-                if (errno != EWOULDBLOCK)
-                {
-                  perror("  recv() failed");
-                  close_conn = TRUE;
                 }
-                break;
-              }
-              if (n == 0)
-              {
-                printf("  Connection closed\n");
-                close_conn = TRUE;
-                break;
-              }
-              log_info("Received %d bytes\n", n );
-              parse_ctrl_if( buf, n );            
-            } while( TRUE );
+                if (n == 0)
+                {
+                  printf("  Connection closed\n");
+                  close_conn = TRUE;
+                  break;
+                }
+                log_info("Received %d bytes\n", n );
+                parse_ctrl_if( buf, n );            
+          } while( TRUE );
+        }
+      }
+      //
+      // Ctrl
+      // 
+      if ( fds[CLNTIX].revents & POLLIN )
+      {
+        if( ! connection_status & CLNT )
+        {
+          fds[CLNTIX].revents = 0;
+          log_info("Input on event sock : %d\n", fds[CLNTIX].fd );
+          new_sd = accept(fds[CLNTIX].fd, NULL, NULL);
+          log_info("New connection on ctrl port : %d\n",new_sd );
+          connection_status |= CLNT;
+          if (new_sd < 0)
+          {
+            if (errno != EWOULDBLOCK)
+            {
+              perror("  accept() failed");
+              end_server = TRUE;
+            }
+            break;
+          } else {
+            close( fds[CLNTIX].fd );
+            fds[CLNTIX].fd = 0;
           }
+        } else {
+          do
+          {
+            n = recv( fds[CLNTIX].fd, buf, sizeof( buf ), 0 );
+            if (n < 0)
+            {
+              if (errno != EWOULDBLOCK)
+              {
+                perror("  recv() failed");
+                close_conn = TRUE;
+              }
+              break;
+            }
+            if (n == 0)
+            {
+              printf("  Connection closed\n");
+              close_conn = TRUE;
+              break;
+            }
+            log_info("Received %d bytes\n", n );
+            parse_ctrl_if( buf, n );
+          } while( TRUE );
         }
       }
     }
-    for ( int i = 0; i < 2 ; i++)
-    {
-      if(fds[i].fd >= 0)
-        close(fds[i].fd);
-    } 
-    printf("All file descriptors closed; bye\n");
-    exit(EXIT_SUCCESS);
-  }
+  for ( int i = 0; i < 4 ; i++)
+  {
+    if(fds[i].fd >= 0)
+    close(fds[i].fd);
+  } 
+  printf("All file descriptors closed; bye\n");
+  exit(EXIT_SUCCESS);
   return 0;
 }
