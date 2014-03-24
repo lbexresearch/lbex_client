@@ -206,12 +206,21 @@ make_socket_non_blocking (int sfd)
  *
  */
 static int
-connect_exchange( int ip, int port )
+connect_to( char* ip, int port )
 {
-  int fd = 3;
+  int fd;
+  int sock;
+  
   log_info("Connection to me on port %d\n", port);  
 
-  return fd;
+  sock=socket(AF_INET,SOCK_STREAM, 0);
+  sockaddr_in serverAddress;
+  serverAddress.sin_family=AF_INET;
+  serverAddress.sin_port=htons(port);
+  serverAddress.sin_addr.s_addr=inet_addr(ip);
+
+  return( connect(sock ,(struct sockaddr *) &serverAddress,sizeof(serverAddress)));
+
 }
 
 
@@ -328,7 +337,7 @@ int join_mc_gr( char* ip, int port )
       /* called for each local interface over which the multicast */
       /* datagrams are to be received. */
       group.imr_multiaddr.s_addr = inet_addr( ip );
-      group.imr_interface.s_addr = inet_addr("192.168.0.3");
+      group.imr_interface.s_addr = inet_addr("192.168.2.42");
       if(setsockopt(sd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&group, sizeof(group)) < 0)
       {
         perror("Adding multicast group error");
@@ -482,9 +491,9 @@ struct connection {
 #define MAX_BUF     1000        /* Maximum bytes fetched by a single read() */
 #define TRUE 1
 #define FALSE 0
-#define BURP 0x01
-#define BURPIX BURP - 1
-#define EXCH 0x02
+#define BURP 0x01       // Bitmask
+#define BURPIX BURP - 1 // Index in the fds array.
+#define EXCH 0x02       // 
 #define EXCHIX EXCH - 1
 #define CLNT 0x03
 #define CLNTIX CLNT - 1
@@ -517,27 +526,31 @@ main ()
   connection exch_connection;
   
   char buf[1024];
-  char ctrl_port[] = "6500";
+  char clnt_port[] = "6500";
   char exch_ip[] = "192.168.0.3";
   int  exch_port = 6003;
   char burp_ip[] = "239.9.9.9";
   int burp_port = 7000;
   int burp_fd;
   
-  log_info("Starting lbex order gw listening on port : %d\n", ctrl_port );
+  log_info("Starting lbex order gw listening on port : %d\n", clnt_port );
 
   log_info("Join multicast group %s:%d\n", burp_ip, burp_port );
   sfd = join_mc_gr( burp_ip,  burp_port );
-  if( burp_fd < 0 ) {
+  if( sfd < 0 ) {
     log_err("Failed to join multicast group, shutting down : %d\n", sfd );
     exit( 1 );
   }
-  fds[BURP - 1].fd = sfd;
-  fds[BURP - 1].events = POLLIN;
+  fds[BURPIX].fd = sfd;
+  fds[BURPIX].events = POLLIN;
   connection_status |= BURP;
 
   log_info("Connect to exchange %s:%d\n", exch_ip, exch_port );
-   
+  sfd = connect_to( exch_ip, exch_port );
+  if( sfd < 0 ) {
+    log_err("Failed to connect to exhange, shutting down : %s %d\n", exch_ip, exch_port );
+    exit( 1 );
+  }
 
   log_info("Creating client socket : %d\n", clnt_port );
  
@@ -549,10 +562,10 @@ main ()
     // If 
     if ( ! connection_status && CLNT )
     {
-      sfd = create_ctrl_socket( ctrl_port ); 
+      sfd = create_ctrl_socket( clnt_port ); 
       if (sfd == -1)
       {
-        log_err("Couldn't allocate ctrl port %.4s\n", ctrl_port);
+        log_err("Couldn't allocate ctrl port %.4s\n", clnt_port);
         exit( -1 );
       }
       fds[CLNT].fd = sfd;
