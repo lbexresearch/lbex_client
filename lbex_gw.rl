@@ -523,6 +523,7 @@ main ()
   int    close_conn;
   int control_socket;
   int sfd;
+  int client_socket;
   int numOpenFds;
   struct pollfd fds[4];
   connection ctrl_connection;
@@ -531,7 +532,8 @@ main ()
   char buf[1024];
   char clnt_ip[] = "127.0.0.1";
   int  clnt_port = 6500;
-  char exch_ip[] = "192.168.0.3";
+//  char exch_ip[] = "192.168.0.3";
+  char exch_ip[] = "127.0.0.1";
   int  exch_port = 6003;
   char burp_ip[] = "239.9.9.9";
   int burp_port  = 7000;
@@ -539,14 +541,18 @@ main ()
   
   log_info("Starting lbex order gw listening on port : %d\n", clnt_port );
 
+/*
   log_info("Join multicast group %s:%d\n", burp_ip, burp_port );
   sfd = join_mc_gr( burp_ip,  burp_port );
   if( sfd < 0 ) {
     log_err("Failed to join multicast group, shutting down : %d\n", sfd );
     exit( 1 );
   }
-  fds[BURPIX].fd = sfd;
+
+*/
+  fds[BURPIX].fd = -1;
   fds[BURPIX].events = POLLIN;
+  fds[BURPIX].revents = 0;
   connection_status |= BURP;
 
   log_info("Connect to exchange %s:%d\n", exch_ip, exch_port );
@@ -560,9 +566,9 @@ main ()
   connection_status |= EXCH;
 
   log_info("Creating client socket : %d\n", clnt_port );
-  sfd = create_client_socket( clnt_port );
-  fds[CLNTIX].fd = sfd;
-  fds[CLNTIX].events = POLLIN;
+  client_socket = create_client_socket( clnt_port );
+  fds[CLNTIX].fd = client_socket;
+  fds[CLNTIX].events = POLLIN | POLLPRI;
    
 
   fds[RREQIX].fd = sfd;
@@ -574,24 +580,6 @@ main ()
   {
     log_info("Connection status : %d\n", connection_status );
     // If 
-    if ( ! connection_status && CLNT )
-    {
-      sfd = create_client_socket( clnt_port ); 
-      if (sfd == -1)
-      {
-        log_err("Couldn't allocate ctrl port %.4s\n", clnt_port);
-        exit( -1 );
-      }
-      fds[CLNT].fd = sfd;
-      fds[CLNT].events = POLLIN;
-    } 
-    
-    if( ! connection_status  && EXCH )
-    {
-      log_info("Connection to exchange on port %.4c\n", exch_port ); 
-      fds[EXCHIX].fd = sfd;
-      fds[EXCHIX].events = POLLIN;  
-    }
   
     int n;
     printf("Waiting for incomming packets, no sockets : %d\n", sockets);
@@ -650,49 +638,73 @@ main ()
       fds[CLNTIX].revents =  0;
       log_info("Input on event sock : %d\n", fds[CLNTIX].fd ); 
       exit( 0 );
-      if( ! connection_status & CLNT )
+      if( ! client_socket )
       {
         fds[CLNTIX].revents = 0;
-        log_info("Input on event sock : %d\n", fds[CLNTIX].fd );
         new_sd = accept(fds[CLNTIX].fd, NULL, NULL);
-        log_info("New connection on ctrl port : %d\n",new_sd );
-        connection_status |= CLNT;
-        if (new_sd < 0)
+        if( new_sd < 0 )
         {
-          if (errno != EWOULDBLOCK)
-          {
-            perror("  accept() failed");
-            end_server = TRUE;
-          }
-          break;
-        } else {
-          close( fds[CLNTIX].fd );
-          fds[CLNTIX].fd = 0;
+          perror("accept()");
+        } else  {
+          close( fds[CLNTIX].fd ); // Close client port
+          log_info("New connection on ctrl port : %d\n",new_sd );
+          fds[CLNTIX].fd = new_sd;
+          client_socket = 0; 
+          connection_status |= CLNT;
         }
       } else {
-        // do
-        // {
-          n = recv( fds[CLNTIX].fd, buf, sizeof( buf ), 0 );
-          if (n < 0)
-          {
-            if (errno != EWOULDBLOCK)
-            {
-              perror("  recv() failed");
-              close_conn = TRUE;
-            }
-            break;
-          }
-          if (n == 0)
-          {
-            printf("  Connection closed\n");
-            close_conn = TRUE;
-            break;
-          }
-          log_info("CLNT : Received %d bytes\n", n );
-          parse_ctrl_if( buf, n );
+        fds[CLNTIX].revents = 0; 
+        n = recv( fds[CLNTIX].fd, buf, sizeof( buf ), 0 );
+       if (n < 0)
+       {
+         if (errno != EWOULDBLOCK)
+         {
+           perror("  recv() failed");
+           close_conn = TRUE;
+         }
+         break;
+       }
+       if (n == 0)
+       {
+         printf("  Connection closed\n");
+         close_conn = TRUE;
+         break;
+       }
+       log_info("CLNT : Received %d bytes\n", n );
+       parse_ctrl_if( buf, n );
         // } while( n );
       }
     }
+    if( fds[EXCHIX].revents == POLLIN )
+    {
+      fds[EXCHIX].revents = 0;
+      printf("Received data on the EXCH port\n");
+      n = recv( fds[EXCHIX].fd, buf, sizeof( buf ), 0 );
+      if (n < 0)
+      {
+        if (errno != EWOULDBLOCK)
+        {
+          perror("  recv() failed");
+          close_conn = TRUE;
+        }
+        break;
+      }
+      if (n == 0)
+      {
+        printf("  Connection closed\n");
+        close_conn = TRUE;
+        log_info("Creating client socket : %d\n", clnt_port );
+        client_socket = create_client_socket( clnt_port );
+        fds[CLNTIX].fd = client_socket;
+        fds[CLNTIX].events = POLLIN;
+        break;
+      }
+      log_info("EXCH : Received %d bytes\n", n );
+      parse_ctrl_if( buf, n );
+
+    }
+
+    
     printf("End of loop\n");
   }
   for ( int i = 0; i < 4 ; i++)
