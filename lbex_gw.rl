@@ -219,8 +219,9 @@ connect_to( char* ip, int port )
   serverAddress.sin_port=htons(port);
   serverAddress.sin_addr.s_addr=inet_addr(ip);
 
-  return( connect(sock ,(struct sockaddr *) &serverAddress,sizeof(serverAddress)));
-
+  fd = connect(sock ,(struct sockaddr *) &serverAddress,sizeof(serverAddress));
+  log_info("FD to EXCH : %d\n", fd );
+  return( fd );
 }
 
 
@@ -229,18 +230,19 @@ connect_to( char* ip, int port )
  * @brief Create the control socket.
  */  
 static int
-create_ctrl_socket (char *port)
+create_client_socket ( int port )
 {
   struct addrinfo hints;
   struct addrinfo *result, *rp;
   int s, sfd;
+  char portt[] = "6500";
 
   memset (&hints, 0, sizeof (struct addrinfo));
   hints.ai_family   = AF_UNSPEC;     /* Return IPv4 and IPv6 choices */
   hints.ai_socktype = SOCK_STREAM;   /* We want a TCP socket */
   hints.ai_flags    = AI_PASSIVE;    /* All interfaces */
 
-  s = getaddrinfo (NULL, port, &hints, &result);
+  s = getaddrinfo (NULL, portt, &hints, &result);
   if (s != 0)
     {
       fprintf (stderr, "getaddrinfo: %s\n", gai_strerror (s));
@@ -337,7 +339,8 @@ int join_mc_gr( char* ip, int port )
       /* called for each local interface over which the multicast */
       /* datagrams are to be received. */
       group.imr_multiaddr.s_addr = inet_addr( ip );
-      group.imr_interface.s_addr = inet_addr("192.168.2.42");
+      // group.imr_interface.s_addr = inet_addr("192.168.2.42");
+      // group.imr_interface.s_addr = inet_addr("192.168.0.3");
       if(setsockopt(sd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&group, sizeof(group)) < 0)
       {
         perror("Adding multicast group error");
@@ -526,11 +529,12 @@ main ()
   connection exch_connection;
   
   char buf[1024];
-  char clnt_port[] = "6500";
+  char clnt_ip[] = "127.0.0.1";
+  int  clnt_port = 6500;
   char exch_ip[] = "192.168.0.3";
   int  exch_port = 6003;
   char burp_ip[] = "239.9.9.9";
-  int burp_port = 7000;
+  int burp_port  = 7000;
   int burp_fd;
   
   log_info("Starting lbex order gw listening on port : %d\n", clnt_port );
@@ -551,8 +555,18 @@ main ()
     log_err("Failed to connect to exhange, shutting down : %s %d\n", exch_ip, exch_port );
     exit( 1 );
   }
+  fds[EXCHIX].fd = sfd;
+  fds[EXCHIX].events = POLLIN;
+  connection_status |= EXCH;
 
   log_info("Creating client socket : %d\n", clnt_port );
+  sfd = create_client_socket( clnt_port );
+  fds[CLNTIX].fd = sfd;
+  fds[CLNTIX].events = POLLIN;
+   
+
+  fds[RREQIX].fd = sfd;
+  fds[RREQIX].events = POLLIN;  
  
   // parse_cmd_if( cmd_fd ); 
 
@@ -562,7 +576,7 @@ main ()
     // If 
     if ( ! connection_status && CLNT )
     {
-      sfd = create_ctrl_socket( clnt_port ); 
+      sfd = create_client_socket( clnt_port ); 
       if (sfd == -1)
       {
         log_err("Couldn't allocate ctrl port %.4s\n", clnt_port);
@@ -579,100 +593,108 @@ main ()
       fds[EXCHIX].events = POLLIN;  
     }
   
-//    while( ! ctrl_connection.status )
-//     {
-      int n;
-      printf("Waiting for incomming packets, no sockets : %d\n", sockets);
-      n = poll(fds, sockets, 10000 );
-  
-      log_info("Event on sockets : %d\n", n); 
-      if (n == -1) {
-        log_info("Poll returned -1", n );
-      } 
-      else if ( n == 0 )
+    int n;
+    printf("Waiting for incomming packets, no sockets : %d\n", sockets);
+    n = poll(fds, sockets, 10000 );
+ 
+    for( int i = 0; i < 4; i++ )
+    {
+      printf("fds[%d].revents = %d ( %d )\n", i, fds[i].revents, fds[i].fd );
+    }
+
+    log_info("Event on sockets : %d\n", n); 
+    if (n == -1) {
+      log_info("Poll returned -1", n );
+    } 
+    else if ( n == 0 )
+    {
+      log_info("Poll timed out\n", n ); 
+    }
+    else
+    { 
+      // Check for incomming data BURP, CTRL.
+      // BURP inpur
+      if ( fds[BURPIX].revents & POLLIN )
       {
-        log_info("Poll timed out\n", n ); 
-      }
-      else
-      { 
-        // Check for incomming data BURP, CTRL.
-        // BURP inpur
-        if ( fds[BURPIX ].revents & POLLIN )
+        fds[BURPIX].revents = 0;
+        log_info("Input on event sock : %d\n", fds[BURP].fd ); 
+        // do 
         {
-          fds[BURPIX].revents = 0;
-          log_info("Input on event sock : %d\n", fds[BURP].fd ); 
-          do 
-          {
-            n = recv( fds[BURPIX].fd, buf, sizeof( buf ), 0 );
-            if (n < 0)
-            {
-              if (errno != EWOULDBLOCK)
-              {
-                perror("  recv() failed");
-                close_conn = TRUE;
-              }
-              break;
-                }
-                if (n == 0)
-                {
-                  printf("  Connection closed\n");
-                  close_conn = TRUE;
-                  break;
-                }
-                log_info("Received %d bytes\n", n );
-                parse_ctrl_if( buf, n );            
-          } while( TRUE );
-        }
-      }
-      //
-      // Ctrl
-      // 
-      if ( fds[CLNTIX].revents & POLLIN )
-      {
-        if( ! connection_status & CLNT )
-        {
-          fds[CLNTIX].revents = 0;
-          log_info("Input on event sock : %d\n", fds[CLNTIX].fd );
-          new_sd = accept(fds[CLNTIX].fd, NULL, NULL);
-          log_info("New connection on ctrl port : %d\n",new_sd );
-          connection_status |= CLNT;
-          if (new_sd < 0)
+          n = recv( fds[BURPIX].fd, buf, sizeof( buf ), 0 );
+          if (n < 0)
           {
             if (errno != EWOULDBLOCK)
             {
-              perror("  accept() failed");
-              end_server = TRUE;
+              perror("  recv() failed");
+              close_conn = TRUE;
             }
             break;
-          } else {
-            close( fds[CLNTIX].fd );
-            fds[CLNTIX].fd = 0;
-          }
-        } else {
-          do
-          {
-            n = recv( fds[CLNTIX].fd, buf, sizeof( buf ), 0 );
-            if (n < 0)
-            {
-              if (errno != EWOULDBLOCK)
-              {
-                perror("  recv() failed");
-                close_conn = TRUE;
               }
-              break;
-            }
-            if (n == 0)
-            {
-              printf("  Connection closed\n");
-              close_conn = TRUE;
-              break;
-            }
-            log_info("Received %d bytes\n", n );
-            parse_ctrl_if( buf, n );
-          } while( TRUE );
+              if (n == 0)
+              {
+                printf("  Connection closed\n");
+                close_conn = TRUE;
+                break;
+              }
+              log_info("BURP :Received %d bytes\n", n );
+              parse_ctrl_if( buf, n );            
+        // } while( n > 100 );
         }
       }
     }
+    //
+    // Ctrl
+    // 
+    if ( fds[CLNTIX].revents & POLLIN )
+    {
+      fds[CLNTIX].revents =  0;
+      log_info("Input on event sock : %d\n", fds[CLNTIX].fd ); 
+      exit( 0 );
+      if( ! connection_status & CLNT )
+      {
+        fds[CLNTIX].revents = 0;
+        log_info("Input on event sock : %d\n", fds[CLNTIX].fd );
+        new_sd = accept(fds[CLNTIX].fd, NULL, NULL);
+        log_info("New connection on ctrl port : %d\n",new_sd );
+        connection_status |= CLNT;
+        if (new_sd < 0)
+        {
+          if (errno != EWOULDBLOCK)
+          {
+            perror("  accept() failed");
+            end_server = TRUE;
+          }
+          break;
+        } else {
+          close( fds[CLNTIX].fd );
+          fds[CLNTIX].fd = 0;
+        }
+      } else {
+        // do
+        // {
+          n = recv( fds[CLNTIX].fd, buf, sizeof( buf ), 0 );
+          if (n < 0)
+          {
+            if (errno != EWOULDBLOCK)
+            {
+              perror("  recv() failed");
+              close_conn = TRUE;
+            }
+            break;
+          }
+          if (n == 0)
+          {
+            printf("  Connection closed\n");
+            close_conn = TRUE;
+            break;
+          }
+          log_info("CLNT : Received %d bytes\n", n );
+          parse_ctrl_if( buf, n );
+        // } while( n );
+      }
+    }
+    printf("End of loop\n");
+  }
   for ( int i = 0; i < 4 ; i++)
   {
     if(fds[i].fd >= 0)
