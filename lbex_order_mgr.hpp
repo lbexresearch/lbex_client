@@ -15,23 +15,54 @@
  * 5.1  Uncolicited cancel of full order.
  * 5.2  Unsolicited cancel of partial filled order.
  */
+#include <string>
+#include <map>
+#include <iostream>
+#include <fstream>
+#include <stdint.h>
+#include <vector>
 
+using namespace std;
+
+enum Side 
+{ 
+  B = 0,
+  S = 1
+};
+
+class Instrument {
+  uint32_t instument_id;
+  char     symbol[8];
+};
 
 class InstrumentTable {
-  Quote instrumet[MAX_INSTRUMENTS];
+  // Quote instrumet[MAX_INSTRUMENTS];
   
-  char [
   public:
+    InstrumentTable( const string file_n );
     int Init( FILE fh ); 
-}
+    
+};
 
+InstrumentTable::InstrumentTable( const string file_n )
+{
+  std::cout << "Init InstrumentTable from file : " << file_n << std::endl;
 
-int InstrumentTable::Init
+  ifstream instrument_file( file_n.c_str(), std::ifstream::in );
 
+  instrument_file.close();
+};
+
+class Order {
+  Instrument instrument;
+  Side       side;
+  int        qty;
+  int        price;
+};
 
 class Quote {
-  Orders buy;
-  Orders sell;
+  Order buy;
+  Order sell;
   uint32_t matched_buy;
   uint32_t total_price__buy;
   uint32_t matched_sell;
@@ -39,24 +70,37 @@ class Quote {
 
 };
 
-template<class orderbook>
+class OrderBook {
+  Instrument  instrument;
+  vector<Order> buyOrders;
+  vector<Order> sellOrders;
+};
+  
+
+template<class Orderbook>
 void add( uint32_t qty, uint32_t price )
 {
-  open_value += qty * price;
-  open_qty   += qty;
-}
+  static uint32_t open_value =+ qty * price;
+  static uint32_t open_qty   =+ qty;
+};
 
-void remove( uint32_t qty, uint32_t price )
+// template<class orderbook>
+void cancel( uint32_t qty, uint32_t price )
 {
-  open_value += qty * price;
-  open_qty   += qty;
-}
+  
+  static uint32_t open_value = 0;
+  static uint32_t open_qty = 0;
+
+  open_value =+ qty * price;
+  open_qty   =+ qty;
+};
 
 
 
-template fill( uint32_t qty, uint32_t price )
+template<class orderbook> 
+void fill( uint32_t qty, uint32_t price )
 {
-  remove( qty, price );
-  realised_value += qty * price;
-  realised_qty   += qty;
-} 
+  cancel( qty, price );
+  uint32_t realised_value =+ qty * price;
+  uint32_t realised_qty   =+ qty;
+}; 

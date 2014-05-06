@@ -20,12 +20,12 @@
  * 7.2 Shutdown process.
  *
  *
- *   ctrl orderReq  --> lbex_client --> order_table --> order exchange
- *   ctrl orderAck  <-- lbex_client <-- order_table <-- ack   exchange
- *   ctrl orderMat  <-- lbex_client <-- order_table <-- match exchange
+ *   clnt orderReq  --> lbex_gw --> order_table --> order exchange
+ *   clnt orderAck  <-- lbex_gw <-- order_table <-- ack   exchange
+ *   clnt orderMat  <-- lbex_gw <-- order_table <-- match exchange
                                         match_table <-|
- *   ctrl cancelOrd --> lbex_client -->             --> cancel exchange
- *   ctrl canelAcl  <-- lbex_client <-- order_table <-- cancelled exchange
+ *   clnt cancelOrd --> lbex_gw -->             --> cancel exchange
+ *   clnt canelAcl  <-- lbex_gw <-- order_table <-- cancelled exchange
  *
  * http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#pollman
  */ 
@@ -49,7 +49,7 @@
 #define MAXEVENTS 64
 
 %%{
-  machine ctrl_if;
+  machine clnt_if;
 
   action do_enter_order {
     printf("Enter order : \n");
@@ -94,7 +94,7 @@
 
 
 %%{
-  machine order_mgr;
+  machine burp_feed;
 
   action enter_order {
     printf("Handle order\n");
@@ -118,6 +118,7 @@
   order      = "[BS] quantity instrument@price DAY" > enter_order;
   cancel     = "C orderid orderid" > cancel_order;
   quote      = "Q bid_price ask_price quantity instrument price spread" > enter_quote;
+  heartbeat  = 0xFC; 
   request    = orderid order | cancel | quote;
 
   main := ( order | cancel )*;
@@ -126,8 +127,13 @@
 
 
 
-
-int parse_ctrl_if( char *buffer, int length )
+/*
+ * @brief parser for the clinet interface to the gw
+ *
+ * 
+ *
+ */
+int parse_clnt_if( char *buffer, int length )
 {
   // char buffer[] = "connectdisconnectconnectshutdown";
   char *p;
@@ -136,12 +142,10 @@ int parse_ctrl_if( char *buffer, int length )
 
   printf("1 parse_ctrl_if, cs = %d\n", cs); 
   
-//  %% machine cmd_parser;
-  %% machine ctrl_if_parser;
+  %% machine clnt_parser;
   %% write data;
 
-//  %% include client_cmd;
-  %% include ctrl_if;
+  %% include clnt_if;
   p = buffer;
   pe = buffer + length;
   %%{
@@ -152,21 +156,22 @@ int parse_ctrl_if( char *buffer, int length )
 }
 
 
-int parse_order_if( int fd )
+
+int parse_burp_if( char *buffer, int length )
 {
-  char buffer[] = "B";
+  // char buffer[] = 'B';
   char *p; 
   int  cs; 
   char *pe, *eof;
 
-  printf("parse_order_if : \n"); 
+  printf("parse_burp_if : \n"); 
   
-  %% machine order_if_parser;
+  %% machine burp_parser;
   %% write data;
 
-  %% include order_mgr;
+  %% include burp_feed;
   p = buffer;
-  pe = buffer + 33; 
+  pe = buffer + length; 
   %%{ 
     write init;
     write exec;
@@ -211,7 +216,7 @@ connect_to( char* ip, int port )
   int fd;
   int sock;
   
-  log_info("Connection to me on port %d\n", port);  
+  log_info("Connection to me on : %s %d\n", ip, port);  
 
   sock=socket(AF_INET,SOCK_STREAM, 0);
   sockaddr_in serverAddress;
@@ -532,16 +537,13 @@ main ()
   char buf[1024];
   char clnt_ip[] = "127.0.0.1";
   int  clnt_port = 6500;
-//  char exch_ip[] = "192.168.0.3";
-  char exch_ip[] = "127.0.0.1";
+  char exch_ip[] = "192.168.0.3";
   int  exch_port = 6003;
   char burp_ip[] = "239.9.9.9";
-  int burp_port  = 7000;
-  int burp_fd;
+  int  burp_port  = 7000;
   
   log_info("Starting lbex order gw listening on port : %d\n", clnt_port );
 
-/*
   log_info("Join multicast group %s:%d\n", burp_ip, burp_port );
   sfd = join_mc_gr( burp_ip,  burp_port );
   if( sfd < 0 ) {
@@ -549,9 +551,8 @@ main ()
     exit( 1 );
   }
 
-*/
-  fds[BURPIX].fd = -1;
-  fds[BURPIX].events = POLLIN;
+  fds[BURPIX].fd = sfd;
+  fds[BURPIX].events = POLLIN | POLLPRI;
   fds[BURPIX].revents = 0;
   connection_status |= BURP;
 
@@ -562,16 +563,20 @@ main ()
     exit( 1 );
   }
   fds[EXCHIX].fd = sfd;
-  fds[EXCHIX].events = POLLIN;
+  fds[EXCHIX].events = POLLIN | POLLPRI;
   connection_status |= EXCH;
 
   log_info("Creating client socket : %d\n", clnt_port );
   client_socket = create_client_socket( clnt_port );
+  if( client_socket < 0 ) {
+    log_err("Failed to create client socket, shutting down : %d\n", sfd );
+    exit( 1 );
+  }
   fds[CLNTIX].fd = client_socket;
   fds[CLNTIX].events = POLLIN | POLLPRI;
    
 
-  fds[RREQIX].fd = sfd;
+  fds[RREQIX].fd = -1;
   fds[RREQIX].events = POLLIN;  
  
   // parse_cmd_if( cmd_fd ); 
@@ -606,28 +611,25 @@ main ()
       {
         fds[BURPIX].revents = 0;
         log_info("Input on event sock : %d\n", fds[BURP].fd ); 
-        // do 
+        n = recv( fds[BURPIX].fd, buf, sizeof( buf ), 0 );
+        if (n < 0)
         {
-          n = recv( fds[BURPIX].fd, buf, sizeof( buf ), 0 );
-          if (n < 0)
+          if (errno != EWOULDBLOCK)
           {
-            if (errno != EWOULDBLOCK)
-            {
-              perror("  recv() failed");
-              close_conn = TRUE;
-            }
-            break;
-              }
-              if (n == 0)
-              {
-                printf("  Connection closed\n");
-                close_conn = TRUE;
-                break;
-              }
-              log_info("BURP :Received %d bytes\n", n );
-              parse_ctrl_if( buf, n );            
-        // } while( n > 100 );
+            perror("  recv() failed");
+            close_conn = TRUE;
+          }
+          break;
         }
+        if (n == 0)
+        {
+          printf("BURP : Connection closed\n");
+          close_conn = TRUE;
+          fds[BURPIX].fd = -1;
+          break;
+        }
+        log_info("BURP : Received %d bytes\n", n );
+        parse_burp_if( buf, n );            
       }
     }
     //
@@ -655,24 +657,26 @@ main ()
       } else {
         fds[CLNTIX].revents = 0; 
         n = recv( fds[CLNTIX].fd, buf, sizeof( buf ), 0 );
-       if (n < 0)
-       {
-         if (errno != EWOULDBLOCK)
-         {
-           perror("  recv() failed");
-           close_conn = TRUE;
-         }
-         break;
-       }
-       if (n == 0)
-       {
-         printf("  Connection closed\n");
-         close_conn = TRUE;
-         break;
-       }
-       log_info("CLNT : Received %d bytes\n", n );
-       parse_ctrl_if( buf, n );
-        // } while( n );
+        if (n < 0)
+        {
+          if (errno != EWOULDBLOCK)
+          {
+            perror("  recv() failed");
+            close_conn = TRUE;
+          }
+          break;
+        }
+        if (n == 0)
+        {
+          printf("  Connection closed\n");
+          log_info("Creating client socket : %d\n", clnt_port );
+          client_socket = create_client_socket( clnt_port );
+          fds[CLNTIX].fd = client_socket;
+          fds[CLNTIX].events = POLLIN;
+        } else { 
+          log_info("CLNT : Received %d bytes\n", n );
+          parse_clnt_if( buf, n );
+        }
       }
     }
     if( fds[EXCHIX].revents == POLLIN )
@@ -691,16 +695,12 @@ main ()
       }
       if (n == 0)
       {
-        printf("  Connection closed\n");
+        printf("EXCH : Connection closed\n");
         close_conn = TRUE;
-        log_info("Creating client socket : %d\n", clnt_port );
-        client_socket = create_client_socket( clnt_port );
-        fds[CLNTIX].fd = client_socket;
-        fds[CLNTIX].events = POLLIN;
         break;
       }
       log_info("EXCH : Received %d bytes\n", n );
-      parse_ctrl_if( buf, n );
+      parse_clnt_if( buf, n );
 
     }
 

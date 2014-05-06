@@ -1,8 +1,8 @@
-TARGET = lbex_gw
+TARGET = lbex_gw lbex_client
 CC = g++
 CFLAGS	= -lrt
 
-all: lbex_gw
+all: $(TARGET)
 
 debug: CC += -DDEBUG -g
 debug: $(TARGET)
