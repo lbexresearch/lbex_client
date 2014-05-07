@@ -31,7 +31,7 @@ enum Side
 };
 
 class Instrument {
-  uint32_t instument_id;
+  uint32_t instrument_id;
   char     symbol[8];
 };
 
@@ -46,18 +46,46 @@ class InstrumentTable {
 
 InstrumentTable::InstrumentTable( const string file_n )
 {
+  string    symbolname;
+  string    line;
+  int       lot_size;
+
   std::cout << "Init InstrumentTable from file : " << file_n << std::endl;
 
   ifstream instrument_file( file_n.c_str(), std::ifstream::in );
 
+  while(!instrument_file.eof()){
+    
+    //read data from file
+    line.clear();
+    instrument_file.getline (line,100);
+    sscanf(line," %s %d", &symbolname, &lot_size );
+    
+  }
+  
   instrument_file.close();
 };
 
 class Order {
-  Instrument instrument;
-  Side       side;
-  int        qty;
-  int        price;
+    static uint32_t  unique_id ;
+    const uint32_t   id;
+    Instrument       instrument;
+    Side             side;
+    int              qty;
+    int              price;
+  public:
+    Order( Instrument i, 
+           Side       s,
+           int        q,
+           int        p   
+          ) : id ( unique_id++ )
+    {
+      instrument = i;
+      side       = s;
+      qty        = q;
+      price      = p;
+    }
+
 };
 
 class Quote {
@@ -84,12 +112,12 @@ void add( uint32_t qty, uint32_t price )
   static uint32_t open_qty   =+ qty;
 };
 
-// template<class orderbook>
-void cancel( uint32_t qty, uint32_t price )
+template<typename T>
+T cancel( uint32_t qty, uint32_t price )
 {
   
   static uint32_t open_value = 0;
-  static uint32_t open_qty = 0;
+  static uint32_t open_qty   = 0;
 
   open_value =+ qty * price;
   open_qty   =+ qty;
@@ -97,10 +125,10 @@ void cancel( uint32_t qty, uint32_t price )
 
 
 
-template<class orderbook> 
-void fill( uint32_t qty, uint32_t price )
+template<typename T> 
+T fill( uint32_t qty, uint32_t price )
 {
-  cancel( qty, price );
+  T::cancel( qty, price );
   uint32_t realised_value =+ qty * price;
   uint32_t realised_qty   =+ qty;
 }; 

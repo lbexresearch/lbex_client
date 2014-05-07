@@ -43,6 +43,7 @@
 #include <time.h>
 #include <errno.h>
 
+#include "lbex_order_mgr.hpp"
 #include "logger.h"
 
 #define AUTO_CONNECT = 0
@@ -422,7 +423,10 @@ main ()
   struct pollfd fds[2];
   connection ctrl_connection;
   connection exch_connection;
-  
+
+  InstrumentTable instruments("instruments.txt");
+  OrderBook ob;
+    
   char buf[1024];
   char ctrl_port[] = "6500";
   char exch_port[] = "65000";
