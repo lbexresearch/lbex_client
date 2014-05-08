@@ -425,7 +425,9 @@ main ()
   connection exch_connection;
 
   InstrumentTable instruments("instruments.txt");
-  OrderBook ob;
+  Instrument i1( "GOOG" );
+  // OrderBook ob( i1);
+  OrderBook ob();
     
   char buf[1024];
   char ctrl_port[] = "6500";

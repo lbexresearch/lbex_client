@@ -30,20 +30,48 @@ enum Side
   S = 1
 };
 
+
+/**
+ * @brief Instrument information.
+ */
 class Instrument {
   uint32_t instrument_id;
   char     symbol[8];
+  int      status;
+  public:
+  Instrument();
+  Instrument( string symbol ): status( 0 ) {
+    std::cout << "Creating Instrument " << symbol << endl;
+  }
 };
 
+
+
+
+
+/**
+ * @brief Instrument table
+ *
+ * The InstrumentTable class handles and manipulates an instrument table.
+ * Creates mapping between strings and index.
+ *
+ * 
+ */
 class InstrumentTable {
   // Quote instrumet[MAX_INSTRUMENTS];
   
   public:
     InstrumentTable( const string file_n );
-    int Init( FILE fh ); 
-    
+    int Add( Instrument );
 };
 
+
+/**
+ * @brief InstrumentTable constructor
+ *
+ * Creates the instrument table from a file.
+ *
+ */
 InstrumentTable::InstrumentTable( const string file_n )
 {
   string    symbolname;
@@ -54,15 +82,9 @@ InstrumentTable::InstrumentTable( const string file_n )
 
   ifstream instrument_file( file_n.c_str(), std::ifstream::in );
 
-  while(!instrument_file.eof()){
-    
-    //read data from file
-    line.clear();
-    std::getline( instrument_file, line );
-    // sscanf(line," %s %d", &symbolname, &lot_size );
-    std::cout << "Line : " << line << std::endl; 
+  while( instrument_file >> symbolname >> lot_size ){   
+    std::cout << "Line : " << symbolname << ";" << lot_size << endl;
   }
-  
   instrument_file.close();
 };
 
@@ -98,10 +120,13 @@ class Quote {
 
 };
 
-class OrderBook {
+class OrderBook : public Instrument {
   Instrument  instrument;
   vector<Order> buyOrders;
   vector<Order> sellOrders;
+  public:
+    // OrderBook( Instrument inst ){ ;}
+    OrderBook( ){ ;}
 };
   
 

@@ -7,12 +7,15 @@ all: $(TARGET)
 debug: CC += -DDEBUG -g
 debug: $(TARGET)
 
-lbex_client: lbex_client.cpp
+lbex_client: lbex_client.cpp lbex_order_mgr.o
 	$(CC) $(CFLAGS) lbex_client.cpp -o lbex_client
 
 lbex_gw: lbex_gw.cpp
 	$(CC) $(CFLAGS) lbex_gw.cpp -o lbex_gw
 
+
+lbex_order_mgr.o: lbex_order_mgr.hpp
+	$(CC) lbex_order_mgr.hpp -o lbex_order_mgr.o
 
 lbex_client.cpp: lbex_client.rl
 	@echo "Generate C++ file"
