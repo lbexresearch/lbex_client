@@ -58,9 +58,9 @@ InstrumentTable::InstrumentTable( const string file_n )
     
     //read data from file
     line.clear();
-    instrument_file.getline (line,100);
-    sscanf(line," %s %d", &symbolname, &lot_size );
-    
+    std::getline( instrument_file, line );
+    // sscanf(line," %s %d", &symbolname, &lot_size );
+    std::cout << "Line : " << line << std::endl; 
   }
   
   instrument_file.close();
