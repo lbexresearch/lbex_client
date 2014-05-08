@@ -1,1 +1,7 @@
 A beer trading client and a gateway to the lbex_me.
+
+
+
+git pull origin master
+git commit -m "Changes and improvments" -a
+git push origin master
