@@ -1,8 +1,9 @@
-TARGET = lbex_gw lbex_client
+TARGET = lbex_gw lbex_client refdata
 CC = g++
 CFLAGS	= -lrt
 
 all: $(TARGET)
+
 
 debug: CC += -DDEBUG -g
 debug: $(TARGET)
@@ -31,3 +32,7 @@ lbex_gw.cpp: lbex_gw.rl
 	@echo "Generate dot file"
 	ragel -Vp -o lbex_gw.dot lbex_gw.rl
 	dot -Tpng lbex_gw.dot -o lbex_gw.png
+
+
+refdata: refdata.cpp
+	g++ refdata.cpp -o refdata
