@@ -1,5 +1,6 @@
 #include <string>
 #include <iostream>
+#include <fstream>
 #include <map>
 
 using namespace std;
@@ -7,7 +8,8 @@ using namespace std;
 int main()
 {
  
-    std::string instrument;
+    string instrument;
+    string filename;
     int x;
     std::map <std::string,int> instrument2int;
 
@@ -21,7 +23,11 @@ int main()
     std::map<std::string,int>::iterator it = instrument2int.begin();
 
 
-    cout << "Instrument Mapping :\n";
+    cout << "Reference data file :";
+    cin >> filename;
+
+    ifstream ifs;
+    ifs.open("BATSSymbols-PROD.csv",std::ifstream::in); 
     for( it=instrument2int.begin();it!=instrument2int.end(); ++it) 
         std::cout << it->first << std::endl;
 }
