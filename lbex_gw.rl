@@ -288,7 +288,7 @@ create_client_socket ( int port )
     perror ("listen");
     abort ();
   }
-
+  printf("Client fd : %d\n", sfd );
   return sfd;
 }
 
@@ -402,17 +402,20 @@ int verify_login( int fd )
  * Initially :
  *
  * 1.0 Start the gateway.
-
- * 2.  Check for recovery file
- * 2.1 Parse recovery file is present, populate internal data structures.
-
- * 1.1 Join the me multicast feed.
-
-
-
-
- * 1.2 Wait for a heartbeat.
- * 1.3 Connect to the exchange order management port.
+ * 
+ * 2.0 Listen to multicast feed, record first sequence number.
+ * 2.1 If first sequence number is not 1 -> recover.
+ * 2.1.0 Check for recovery file
+ * 3.1 Parse recovery file is present, populate internal data structures.
+ * 4.0 Recover messages between end of recovery file and first multicast messge.
+ * 5.0 Scan live multicast buffer. 
+ * 6.0 Join the me multicast feed.
+ *
+ *
+ *
+ *
+ * 6.0 Wait for a heartbeat.
+ * 7.3 Connect to the exchange order management port.
  * 
  * 2.2 Wait for SOD and and then populate the gateway with reference data.
  * 
@@ -528,7 +531,10 @@ main ()
   int    close_conn;
   int control_socket;
   int sfd;
-  int client_socket;
+  int exch_fds;
+  int client_socket = 0;
+  int client_connected = 0;
+  struct sockaddr_in client_address; 
   int numOpenFds;
   struct pollfd fds[4];
   connection ctrl_connection;
@@ -588,7 +594,7 @@ main ()
   
     int n;
     printf("Waiting for incomming packets, no sockets : %d\n", sockets);
-    n = poll(fds, sockets, 10000 );
+    n = poll(fds, 4, 10000 );
  
     for( int i = 0; i < 4; i++ )
     {
@@ -638,12 +644,14 @@ main ()
     if ( fds[CLNTIX].revents & POLLIN )
     {
       fds[CLNTIX].revents =  0;
-      log_info("Input on event sock : %d\n", fds[CLNTIX].fd ); 
-      exit( 0 );
-      if( ! client_socket )
+      log_info("Input on client fds : %d\n", fds[CLNTIX].fd ); 
+      // exit( 0 );
+      if( ! client_connected )
       {
         fds[CLNTIX].revents = 0;
-        new_sd = accept(fds[CLNTIX].fd, NULL, NULL);
+        unsigned int l;
+        memset(&client_address, 0, l = sizeof(client_address));
+        new_sd = accept(fds[CLNTIX].fd, NULL, &l );
         if( new_sd < 0 )
         {
           perror("accept()");
